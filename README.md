@@ -1,3 +1,5 @@
+## CURRENTLY IN DEVELOPMENT
+
 ## Finite State Machine: Embedded Vision Physical Asset Management System
 
 An embedded computer-vision–driven access and asset-tracking system that automates user identification, item checkout, and check-in via edge sensors and a networked backend.
