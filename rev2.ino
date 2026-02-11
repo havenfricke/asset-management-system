@@ -22,7 +22,7 @@ unsigned long proximityStartTime = 0;
 bool timingActive = false;
 
 // State machine
-enum class SystemState : uint8_t { IDLE, PRESENCE_PENDING, CLASSIFIED };
+enum class SystemState : uint8_t { IDLE, PRESENCE_PENDING, PENDING_CLASSIFIED };
 SystemState systemState = SystemState::IDLE;
 
 void setup()
@@ -179,26 +179,28 @@ void updateStateMachine(bool personSeen, uint16_t distanceMm)
         // validated
         timingActive = false;
         proximityStartTime = 0;
-        systemState = SystemState::CLASSIFIED;
-        Serial.println("State -> CLASSIFIED (person validated)");
+        systemState = SystemState::PENDING_CLASSIFIED;
+        Serial.println("State -> PENDING_CLASSIFIED (person validated)");
         // switch algorithm to classification
         huskylens.writeAlgorithm(ALGORITHM_OBJECT_CLASSIFICATION);
         Serial.println("HUSKYLENS: switched to OBJECT_CLASSIFICATION");
       }
       break;
 
-    case SystemState::CLASSIFIED:
-      // In classified state, keep monitoring presence and range
-      if (!personSeen || !inRange)
+    case SystemState::PENDING_CLASSIFIED:
+      // In classified state, keep monitoring range
+      // At this point we lost ability to ckeck presence via camera during the classification phase
+      if (!inRange)
       {
         // revert to recognition mode
         huskylens.writeAlgorithm(ALGORITHM_OBJECT_RECOGNITION);
         systemState = SystemState::IDLE;
-        resetProximityTimer("CLASSIFIED -> IDLE");
+        resetProximityTimer("PENDING_CLASSIFIED -> IDLE");
         Serial.println("State -> IDLE (classification ended)");
       }
       else
       {
+        Serial.println("Begin classification recognition and countdown");
         // Person still present and in range: perform classification actions here
         // example: read classification results, trigger actions, etc.
       }
