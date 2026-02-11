@@ -5,218 +5,206 @@
 // V53L0X TOF SETTINGS
 Adafruit_VL53L0X tof;
 
-#define DISTANCE_THRESHOLD_MM 800
-#define REQUIRED_TIME_MS 10000
+constexpr uint16_t DISTANCE_THRESHOLD_MM = 800;
+constexpr unsigned long REQUIRED_TIME_MS = 10000UL;
+constexpr unsigned long LOOP_DELAY_MS = 500UL; // small non-blocking pacing
 
+// Timer/state
 unsigned long proximityStartTime = 0;
 bool timingActive = false;
 
 // HUSKYLENS SETTINGS
 HUSKYLENS huskylens;
+const int PERSON_ID = 1;
 
-// ID trained as "person" using default recognition model
-const int PERSON_ID = 1;     
-bool switchedToClassification = false;
+// State machine
+enum class SystemState : uint8_t { IDLE, PRESENCE_PENDING, CLASSIFIED };
+SystemState systemState = SystemState::IDLE;
 
 void setup()
 {
-  // SERIAL INIT
   Serial.begin(115200);
   Serial1.begin(9600);
-
-  //I2C
   Wire.begin();
 
-  // CALL INIT METHOD
   delay(2000);
   InitTof();
-
-  // CALL INIT METHOD
   delay(2000);
   InitHuskylens();
 }
 
 void loop()
 {
-  HuskylensTofRecognitionLoop();
-  HuskylensTofClassificationLoop();
+  // Single pass: read sensors, then update state machine
+  VL53L0X_RangingMeasurementData_t measurement;
+  bool tofOk = readTof(measurement);
+
+  // Read all Huskylens results this pass and determine if person is seen
+  bool personSeen = readHuskylensForPerson();
+
+  // Update state machine using single source of truth
+  updateStateMachine(personSeen, tofOk ? measurement.RangeMilliMeter : 0);
+
+  // Small non-blocking pacing to avoid hogging I2C
+  delay(LOOP_DELAY_MS);
 }
 
-// ------------------------------------------------------------
-// PROGRAM LOGIC
-// ------------------------------------------------------------
-
-// SETUP CALLS
-
-// TOF INITIALIZE SETUP CALL
+// -------------------- Initialization --------------------
 void InitTof()
 {
   Serial.println("Initializing VL53L0X");
   while (!tof.begin())
   {
-    Serial.println("VL53L0X not dectected");
+    Serial.println("VL53L0X not detected");
+    delay(500);
   }
-
   Serial.println("VL53L0X connected");
 }
 
-// HUSKYLENS INITIALIZE SETUP CALL
 void InitHuskylens()
 {
   Serial.println("Initializing HUSKYLENS");
-
   while (!huskylens.begin(Serial1))
   {
     Serial.println("HUSKYLENS not detected");
     delay(5000);
   }
-
   Serial.println("HUSKYLENS connected");
-
-  // Start in Object Recognition
   huskylens.writeAlgorithm(ALGORITHM_OBJECT_RECOGNITION);
   Serial.println("Mode: Object Recognition");
 }
 
-// LOOP CALLS
-
-// RECOGNITION - CALLED IN LOOP
-void HuskylensTofRecognitionLoop()
+// -------------------- Sensor helpers --------------------
+bool readTof(VL53L0X_RangingMeasurementData_t &measurement)
 {
-  if (!huskylens.request()){ Serial.println("Request failed"); return;}
+  tof.rangingTest(&measurement, false);
+  uint16_t range = measurement.RangeMilliMeter;
 
-  if (!huskylens.available()){ delay(200); return; }
+  // common sentinel/error value
+  const bool isError = (range == 8190);
 
-  while (!switchedToClassification && huskylens.available())
+  static bool lastInRange = false;
+  bool nowInRange = (!isError && range <= DISTANCE_THRESHOLD_MM);
+
+  if (isError)
   {
-    HUSKYLENSResult result = huskylens.read();
-
-    Serial.print("ID: ");
-    Serial.print(result.ID);
-    Serial.print(" | X: ");
-    Serial.print(result.xCenter);
-    Serial.print(" | Y: ");
-    Serial.print(result.yCenter);
-    Serial.println("------------");
-
-    // PERSON DETECTED
-    if (!switchedToClassification && result.ID == PERSON_ID)
-    {
-      VL53L0X_RangingMeasurementData_t measurement;
-
-      // pass memory address of measurement
-      tof.rangingTest(&measurement, false);
-
-      Serial.println(measurement.RangeMilliMeter);
-
-      if (measurement.RangeMilliMeter <= DISTANCE_THRESHOLD_MM)
-      {
-        if (!timingActive)
-        {
-          timingActive = true;
-          proximityStartTime = millis();
-          Serial.println("Proximity timer started: Recognition");
-          break;
-        }
-      }
-
-      // Distance > Distance Threshold -> Switch to Object recognition
-      if (measurement.RangeMilliMeter > DISTANCE_THRESHOLD_MM)
-      {
-        huskylens.writeAlgorithm(ALGORITHM_OBJECT_RECOGNITION);
-        Serial.println("Mode: Object Recognition");
-      }
-
-      // Time - Start Time >= Required Time -> Switch to Classification and assign ID
-      if (millis() - proximityStartTime >= REQUIRED_TIME_MS)
-      {
-        Serial.println("Person validated: Switching to object classification");
-
-        huskylens.writeAlgorithm(ALGORITHM_OBJECT_CLASSIFICATION);
-
-        switchedToClassification = true;
-        timingActive = false;
-
-        proximityStartTime = 0;
-
-        delay(200);
-        return;
-      }
-
-      if (measurement.RangeMilliMeter > DISTANCE_THRESHOLD_MM)
-      {
-        resetProximityTimer();
-      }
-
-      return;
-    }
-
-    Serial.println();
+    return;
+  }
+  else if (nowInRange != lastInRange)
+  {
+    // print only when entering or leaving the proximity threshold
+    Serial.print("TOF mm: ");
+    Serial.println(range);
+    lastInRange = nowInRange;
   }
 
-  delay(200);
+  return !isError;
 }
 
-// CLASSIFICATION - CALLED IN LOOP
-void HuskylensTofClassificationLoop()
+
+bool readHuskylensForPerson()
 {
-  if (!huskylens.request()){ Serial.println("Request failed"); return;}
-
-  if (!huskylens.available()){ delay(200); return; }
-
-  while (switchedToClassification && huskylens.available())
+  if (!huskylens.request())
   {
-    HUSKYLENSResult result = huskylens.read();
+    Serial.println("HUSKYLENS request failed");
+    return false;
+  }
 
-    Serial.print("Classified ID: ");
-    Serial.println(result.ID);
+  bool personSeen = false;
 
-    Serial.print("X: ");
-    Serial.print(result.xCenter);
-    Serial.print(" Y: ");
-    Serial.println(result.yCenter);
+  // If no results available, return false (no person seen)
+  if (!huskylens.available()) return false;
 
-    VL53L0X_RangingMeasurementData_t measurement;
+  // Read all results this pass
+  while (huskylens.available())
+  {
+    HUSKYLENSResult r = huskylens.read();
+    Serial.print("HUSKYLENS ID: ");
+    Serial.print(r.ID);
+    Serial.print(" X:");
+    Serial.print(r.xCenter);
+    Serial.print(" Y:");
+    Serial.println(r.yCenter);
 
-    // pass memory address of measurement
-    tof.rangingTest(&measurement, false);
-
-    Serial.println(measurement.RangeMilliMeter);
-
-    if (measurement.RangeMilliMeter <= DISTANCE_THRESHOLD_MM)
+    if (r.ID == PERSON_ID)
     {
-      if (!result.ID)
-      {
-        Serial.print("Unrecognized person");
-        // TODO: wait 10s then classify person
-        return;
-      }
+      personSeen = true;
+      // keep reading remaining results to clear buffer
+    }
+  }
 
-      if (!timingActive)
+  return personSeen;
+}
+
+// -------------------- State machine --------------------
+void updateStateMachine(bool personSeen, uint16_t distanceMm)
+{
+  const bool inRange = (distanceMm > 0 && distanceMm <= DISTANCE_THRESHOLD_MM);
+
+  switch (systemState)
+  {
+    case SystemState::IDLE:
+      if (personSeen && inRange)
       {
+        // start timer
         timingActive = true;
         proximityStartTime = millis();
-        Serial.println("Proximity timer started: Classification");
+        systemState = SystemState::PRESENCE_PENDING;
+        Serial.println("State -> PRESENCE_PENDING (timer started)");
+      }
+      // otherwise remain idle
+      break;
+
+    case SystemState::PRESENCE_PENDING:
+      // Reset if person lost or out of range
+      if (!personSeen || !inRange)
+      {
+        resetProximityTimer("PRESENCE_PENDING -> IDLE");
+        systemState = SystemState::IDLE;
+        Serial.println("State -> IDLE (person lost or out of range)");
         break;
       }
 
-      // TODO: if result.ID = true, do something that is useful for a classified person
-
-      if (measurement.RangeMilliMeter > DISTANCE_THRESHOLD_MM)
+      // Check timeout only when timer active
+      if (timingActive && (millis() - proximityStartTime >= REQUIRED_TIME_MS))
       {
-        resetProximityTimer();
+        // validated
+        timingActive = false;
+        proximityStartTime = 0;
+        systemState = SystemState::CLASSIFIED;
+        Serial.println("State -> CLASSIFIED (person validated)");
+        // switch algorithm to classification
+        huskylens.writeAlgorithm(ALGORITHM_OBJECT_CLASSIFICATION);
+        Serial.println("HUSKYLENS: switched to OBJECT_CLASSIFICATION");
       }
-    }
+      break;
+
+    case SystemState::CLASSIFIED:
+      // In classified state, keep monitoring presence and range
+      if (!personSeen || !inRange)
+      {
+        // revert to recognition mode
+        huskylens.writeAlgorithm(ALGORITHM_OBJECT_RECOGNITION);
+        systemState = SystemState::IDLE;
+        resetProximityTimer("CLASSIFIED -> IDLE");
+        Serial.println("State -> IDLE (classification ended)");
+      }
+      else
+      {
+        // Person still present and in range: perform classification actions here
+        // e.g., read classification results, trigger actions, etc.
+      }
+      break;
   }
-  delay(200);
 }
 
-// ------------------------------------------------------------
-// HELPERS / UTILITY
-// ------------------------------------------------------------
-
-void resetProximityTimer()
+// -------------------- Utility --------------------
+void resetProximityTimer(const char *mode)
 {
+  // Only print if timer was active or start time non-zero
+  if (!timingActive && proximityStartTime == 0) return;
+  Serial.print("Proximity timer reset: ");
+  Serial.println(mode);
   timingActive = false;
+  proximityStartTime = 0;
 }
-
