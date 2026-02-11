@@ -7,7 +7,7 @@ Adafruit_VL53L0X tof;
 
 constexpr uint16_t DISTANCE_THRESHOLD_MM = 800;
 constexpr unsigned long REQUIRED_TIME_MS = 10000UL;
-constexpr unsigned long LOOP_DELAY_MS = 500UL; // small non-blocking pacing
+constexpr unsigned long LOOP_DELAY_MS = 50UL; // small non-blocking pacing
 
 // Timer/state
 unsigned long proximityStartTime = 0;
@@ -80,16 +80,17 @@ bool readTof(VL53L0X_RangingMeasurementData_t &measurement)
   tof.rangingTest(&measurement, false);
   uint16_t range = measurement.RangeMilliMeter;
 
-  // common sentinel/error value
-  const bool isError = (range == 8190);
+  // VL53L0X sentinel/error values
+  const bool isValid = (range != 8190 && range != 8191);
 
   static bool lastInRange = false;
-  bool nowInRange = (!isError && range <= DISTANCE_THRESHOLD_MM);
+  bool nowInRange = (isValid && range <= DISTANCE_THRESHOLD_MM);
 
-  if (isError)
+  if (!isValid)
   {
-    return;
+    return false;
   }
+  
   else if (nowInRange != lastInRange)
   {
     // print only when entering or leaving the proximity threshold
@@ -98,7 +99,7 @@ bool readTof(VL53L0X_RangingMeasurementData_t &measurement)
     lastInRange = nowInRange;
   }
 
-  return !isError;
+  return true;
 }
 
 
