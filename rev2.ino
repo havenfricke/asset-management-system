@@ -4,18 +4,22 @@
 
 // V53L0X TOF SETTINGS
 Adafruit_VL53L0X tof;
-
 constexpr uint16_t DISTANCE_THRESHOLD_MM = 800;
 constexpr unsigned long REQUIRED_TIME_MS = 10000UL;
-constexpr unsigned long LOOP_DELAY_MS = 50UL; // small non-blocking pacing
-
-// Timer/state
-unsigned long proximityStartTime = 0;
-bool timingActive = false;
+constexpr unsigned long LOOP_DELAY_MS = 50UL; // Master loop delay
 
 // HUSKYLENS SETTINGS
 HUSKYLENS huskylens;
 const int PERSON_ID = 1;
+// For Huskylens dropouts
+constexpr unsigned long PERSON_LOST_DEBOUNCE_MS = 500UL; // 500ms allowed if person detection drops out for camera
+unsigned long lastPersonSeenMillis = 0;
+
+
+
+// Timer/state
+unsigned long proximityStartTime = 0;
+bool timingActive = false;
 
 // State machine
 enum class SystemState : uint8_t { IDLE, PRESENCE_PENDING, CLASSIFIED };
@@ -40,7 +44,9 @@ void loop()
   bool tofOk = readTof(measurement);
 
   // Read all Huskylens results this pass and determine if person is seen
-  bool personSeen = readHuskylensForPerson();
+  bool personSeenRaw = readHuskylensForPerson();
+  // Treat person as present if seen recently within debounce window
+  bool personSeen = (personSeenRaw || (millis() - lastPersonSeenMillis) <= PERSON_LOST_DEBOUNCE_MS);
 
   // Update state machine using single source of truth
   updateStateMachine(personSeen, tofOk ? measurement.RangeMilliMeter : 0);
@@ -130,7 +136,8 @@ bool readHuskylensForPerson()
     if (r.ID == PERSON_ID)
     {
       personSeen = true;
-      // keep reading remaining results to clear buffer
+      // record the time we actually saw the person for camera debounce
+      lastPersonSeenMillis = millis(); 
     }
   }
 
@@ -193,7 +200,7 @@ void updateStateMachine(bool personSeen, uint16_t distanceMm)
       else
       {
         // Person still present and in range: perform classification actions here
-        // e.g., read classification results, trigger actions, etc.
+        // example: read classification results, trigger actions, etc.
       }
       break;
   }
