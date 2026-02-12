@@ -161,10 +161,10 @@ void updateStateMachine(bool personSeen, uint16_t distanceMm)
     case SystemState::IDLE:
       if (personSeen && inRange)
       {
+        Serial.println("State -> PRESENCE_PENDING (timer started)");
         timingActive = true;
         proximityStartTime = millis();
         systemState = SystemState::PRESENCE_PENDING;
-        Serial.println("State -> PRESENCE_PENDING (timer started)");
       }
       break;
 
@@ -172,19 +172,19 @@ void updateStateMachine(bool personSeen, uint16_t distanceMm)
       if (!personSeen || !inRange)
       {
         resetProximityTimer("PRESENCE_PENDING -> IDLE");
-        systemState = SystemState::IDLE;
         Serial.println("State -> IDLE (person lost or out of range)");
+        systemState = SystemState::IDLE;
         break;
       }
 
       if (timingActive && (millis() - proximityStartTime >= REQUIRED_TIME_MS))
       {
+        Serial.println("State -> PENDING_FACE_RECOGNITION (person validated)");
+        Serial.println("HUSKYLENS: switched to PENDING_FACE_RECOGNITION");
         timingActive = false;
         proximityStartTime = 0;
-        systemState = SystemState::PENDING_FACE_RECOGNITION;
-        Serial.println("State -> PENDING_FACE_RECOGNITION (person validated)");
         huskylens.writeAlgorithm(ALGORITHM_FACE_RECOGNITION);
-        Serial.println("HUSKYLENS: switched to PENDING_FACE_RECOGNITION");
+        systemState = SystemState::PENDING_FACE_RECOGNITION;
       }
       break;
 
@@ -192,9 +192,9 @@ void updateStateMachine(bool personSeen, uint16_t distanceMm)
       if (!inRange)
       {
         huskylens.writeAlgorithm(ALGORITHM_OBJECT_RECOGNITION);
-        systemState = SystemState::IDLE;
         resetProximityTimer("PENDING_CLASSIFIED -> IDLE");
         Serial.println("State -> IDLE (face recognition ended)");
+        systemState = SystemState::IDLE;
         break;
       }
 
@@ -221,11 +221,11 @@ void updateStateMachine(bool personSeen, uint16_t distanceMm)
           if (huskylens.writeLearn(nextID))
           {
             Serial.println("writeLearn succeeded");
-            systemState = SystemState::KNOWN_FACE_RECOGNITION;
             Serial.println("State -> KNOWN_FACE_RECOGNITION");
             classifyTimingActive = false;
             classifyStartTime = 0;
             CURRENT_PERSON_ID = nextID;
+            systemState = SystemState::KNOWN_FACE_RECOGNITION;
           }
           else
           {
@@ -249,11 +249,10 @@ void updateStateMachine(bool personSeen, uint16_t distanceMm)
 
         if (classifyTimingActive && (millis() - classifyStartTime >= REQUIRED_TIME_MS))
         {
-          systemState = SystemState::KNOWN_FACE_RECOGNITION;
           Serial.println("State -> KNOWN_FACE_RECOGNITION (person recognized)");
           classifyTimingActive = false;
           classifyStartTime = 0;
-
+          systemState = SystemState::KNOWN_FACE_RECOGNITION;
         }
       }
       break;
@@ -261,10 +260,9 @@ void updateStateMachine(bool personSeen, uint16_t distanceMm)
     case SystemState::KNOWN_FACE_RECOGNITION:
       if (!inRange)
       {
-        huskylens.writeAlgorithm(ALGORITHM_OBJECT_RECOGNITION);
-        systemState = SystemState::IDLE;
         resetProximityTimer("KNOWN_FACE_RECOGNITION -> IDLE");
-        Serial.println();
+        systemState = SystemState::IDLE;
+        huskylens.writeAlgorithm(ALGORITHM_OBJECT_RECOGNITION);
         break;
       }
 
@@ -274,10 +272,10 @@ void updateStateMachine(bool personSeen, uint16_t distanceMm)
       {
         if ((millis() - lastPersonSeenMillis) > PERSON_LOST_DEBOUNCE_MS)
         {
-          huskylens.writeAlgorithm(ALGORITHM_OBJECT_RECOGNITION);
-          systemState = SystemState::IDLE;
           resetProximityTimer("KNOWN_FACE_RECOGNITION -> IDLE (lost face)");
           Serial.println("State -> IDLE (known face lost)");
+          systemState = SystemState::IDLE;
+          huskylens.writeAlgorithm(ALGORITHM_OBJECT_RECOGNITION);
         }
         break;
       }
@@ -289,7 +287,7 @@ void updateStateMachine(bool personSeen, uint16_t distanceMm)
         {
           HUSKYLENSResult r = huskylens.read();
 
-          if (r.command == COMMAND_RETURN_BLOCK && r.ID == CURRENT_PERSON_ID)
+          if (r.ID == CURRENT_PERSON_ID)
           {
             stillHere = true;
             Serial.println("Hello");
@@ -302,10 +300,11 @@ void updateStateMachine(bool personSeen, uint16_t distanceMm)
 
         if (!stillHere && (millis() - lastPersonSeenMillis) > PERSON_LOST_DEBOUNCE_MS)
         {
-          huskylens.writeAlgorithm(ALGORITHM_OBJECT_RECOGNITION);
-          systemState = SystemState::IDLE;
+;
           resetProximityTimer("KNOWN_FACE_RECOGNITION -> IDLE (lost face)");
           Serial.println("State -> IDLE (known face lost)");
+          systemState = SystemState::IDLE;
+          huskylens.writeAlgorithm(ALGORITHM_OBJECT_RECOGNITION);
         }
       }
       break;
